@@ -1,14 +1,21 @@
-ESCRO
-Non-custodial P2P marketplace
+ESCRO P2p
+Escro is a non-custodial peer-to-peer (P2P) crypto escrow software platform built on the BNB Smart Chain (BSC). 
 
+## Contract Overview
+- **Network:** BNB Smart Chain Mainnet (Chain ID: 56)
+- **Escro Factory Contract:0xb46043188690737e3E90f1B8d1C8AD40311407F8
+`
+- **Escro Deal Implementation: 0x5ED2f102387F0ff979A47e74e301063155823b7D
+- **Supported Assets:** USDT (BEP-20), BTCB (BEP-20) ETH(BSC)
+
+## Security Architecture
+- **Non-Custodial:** User funds are held by self-executing smart contracts, not corporate servers.
+- **Access Control:** System administration and dispute arbitration are protected by Safe 2-of-3 and 3-of-4 multisig accounts.
+- **ERC-4337 Support:** Compatible with Account Abstraction paymasters for gasless user execution.
+- 
+  About escro p2p
 Sell crypto in Nigeria through merchant offers
 Escro connects crypto sellers with merchant offers in a peer-to-peer marketplace. Review the listed asset, price, trade limits, payment details and terms before you decide whether to start a trade.
-
-Explore the marketplace
-Get the Android app
-Read how Escro works
-Seller getting-started guide
-
 Know the trade steps before you commit crypto
 You can discuss and agree the terms with the merchant in the trade chat while the trade is still CREATED. Do not authorize the crypto lock until you understand and accept the offer. Creating a trade does not itself lock your assets.
 
@@ -55,9 +62,8 @@ Keep secrets private
 Never share your seed phrase, private key, password, recovery code or one-time code with a merchant, another trader or support. Avoid posting unnecessary personal or bank details in chat or evidence. Keep trade discussion in Escro and verify payments in your own payment app.
 
 Crypto assets, counterparties, wallets and blockchain transactions carry risk. Escro does not guarantee prices, payment speed, offer availability or a particular trade outcome. Never release crypto based solely on a payment screenshot.
+# Escro Smart Contracts (BNB Smart Chain)
 
-Terms of Service
-Privacy Policy
-Get started
-Android app
-Sell Crypto in Nigeria to Merchants | Escro
+## Official Links
+- **Website:** https://escro.jdtek.com.ng
+- **Developer:** JDTEK Digitals Ltd
