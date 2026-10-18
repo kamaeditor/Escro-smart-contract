@@ -36,6 +36,18 @@ The seller authorizes release and the on-chain transaction completes. A complete
 
 If a buyer cancels before marking payment sent while the trade is still LOCKED, a successful on-chain cancellation returns the crypto to the seller. If an unpaid trade remains LOCKED past its deadline, the seller may claim a timeout refund. Disputes and refunds depend on the contract state and successful on-chain action; support cannot reverse crypto already released to the buyer.
 
+Network Requirement (BSC / BEP-20 Only)
+Escro is a non-custodial Web3 platform. The smart contracts used for Escro trades operate on the BNB Smart Chain (BSC).
+
+Use the BSC network (BEP-20) for connected wallets and transactions. Check the selected network before sending assets. Sending assets on an unsupported network can result in permanent loss.
+
+Bringing Native Bitcoin to BSC (BTCB)
+Escro operates on BNB Smart Chain, so native Bitcoin (Bitcoin Layer 1) cannot be sent directly to its smart contracts. BTCB is a wrapped version of Bitcoin on BSC.
+
+If you hold native BTC, use a reputable exchange or cross-chain bridge to move it. When withdrawing to your wallet, select BSC (BEP-20) so it arrives as BTCB. Always verify the asset and network before confirming a transfer.
+
+please be aware that only the locked whitelisted token can be traded on Escro
+
 Choose a wallet that works for you
 Escro offers an optional embedded wallet and supports external wallets. The embedded wallet can be convenient in the app, but it does not guarantee faster transactions; wallet approval and blockchain conditions affect timing. Review wallet recovery and security options before choosing.
 
