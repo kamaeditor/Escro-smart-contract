@@ -1,0 +1,677 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 value) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 value) external returns (bool);
+    function transferFrom(address from, address to, uint256 value) external returns (bool);
+}
+
+library Address {
+    function isContract(address account) internal view returns (bool) {
+        return account.code.length > 0;
+    }
+
+    function sendValue(address payable recipient, uint256 amount) internal {
+        require(address(this).balance >= amount, "Address: insufficient balance");
+        (bool success, ) = recipient.call{value: amount}("");
+        require(success, "Address: unable to send value");
+    }
+}
+
+library SafeERC20 {
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        _callOptionalReturn(address(token), abi.encodeWithSelector(token.transfer.selector, to, value));
+    }
+
+    function safeTransferFrom(IERC20 token, address from, address to, uint256 value) internal {
+        _callOptionalReturn(address(token), abi.encodeWithSelector(token.transferFrom.selector, from, to, value));
+    }
+
+    function _callOptionalReturn(address token, bytes memory data) private {
+        require(token.code.length > 0, "SafeERC20: call to non-contract");
+        (bool success, bytes memory returndata) = token.call(data);
+        require(success, "SafeERC20: low-level call failed");
+        if (returndata.length > 0) {
+            require(abi.decode(returndata, (bool)), "SafeERC20: ERC20 operation failed");
+        }
+    }
+}
+
+library Clones {
+    function clone(address implementation) internal returns (address instance) {
+        require(implementation.code.length > 0, "ERC1167: implementation not contract");
+        assembly {
+            let ptr := mload(0x40)
+            mstore(ptr, 0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000000000000000000000)
+            mstore(add(ptr, 0x14), shl(0x60, implementation))
+            mstore(add(ptr, 0x28), 0x5af43d82803e903d91602b57fd5bf30000000000000000000000000000000000)
+            instance := create(0, ptr, 0x37)
+        }
+        require(instance != address(0), "ERC1167: create failed");
+    }
+}
+
+abstract contract Initializable {
+    uint8 private _initialized;
+    bool private _initializing;
+
+    modifier initializer() {
+        bool isTopLevelCall = !_initializing;
+        require(
+            (isTopLevelCall && _initialized < 1) || (!Address.isContract(address(this)) && _initialized == 1),
+            "Initializable: already initialized"
+        );
+        _initialized = 1;
+        if (isTopLevelCall) _initializing = true;
+        _;
+        if (isTopLevelCall) _initializing = false;
+    }
+
+    function _disableInitializers() internal virtual {
+        require(!_initializing, "Initializable: initializing");
+        if (_initialized < type(uint8).max) _initialized = type(uint8).max;
+    }
+}
+
+abstract contract ReentrancyGuard {
+    uint256 private constant NOT_ENTERED = 1;
+    uint256 private constant ENTERED = 2;
+    uint256 private _status = NOT_ENTERED;
+
+    modifier nonReentrant() {
+        require(_status != ENTERED, "ReentrancyGuard: reentrant call");
+        _status = ENTERED;
+        _;
+        _status = NOT_ENTERED;
+    }
+}
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+}
+
+interface IAccessControl {
+    event RoleAdminChanged(bytes32 indexed role, bytes32 indexed previousAdminRole, bytes32 indexed newAdminRole);
+    event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender);
+    event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender);
+    function hasRole(bytes32 role, address account) external view returns (bool);
+    function getRoleAdmin(bytes32 role) external view returns (bytes32);
+    function grantRole(bytes32 role, address account) external;
+    function revokeRole(bytes32 role, address account) external;
+    function renounceRole(bytes32 role, address account) external;
+}
+
+abstract contract AccessControl is Context, IAccessControl {
+    struct RoleData {
+        mapping(address => bool) members;
+        bytes32 adminRole;
+    }
+
+    mapping(bytes32 => RoleData) private _roles;
+    bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
+
+    modifier onlyRole(bytes32 role) {
+        _checkRole(role, _msgSender());
+        _;
+    }
+
+    function hasRole(bytes32 role, address account) public view virtual override returns (bool) {
+        return _roles[role].members[account];
+    }
+
+    function _checkRole(bytes32 role, address account) internal view virtual {
+        require(hasRole(role, account), "AccessControl: missing role");
+    }
+
+    function getRoleAdmin(bytes32 role) public view virtual override returns (bytes32) {
+        return _roles[role].adminRole;
+    }
+
+    function grantRole(bytes32 role, address account) public virtual override onlyRole(getRoleAdmin(role)) {
+        require(account != address(0), "AccessControl: zero account");
+        _grantRole(role, account);
+    }
+
+    function revokeRole(bytes32 role, address account) public virtual override onlyRole(getRoleAdmin(role)) {
+        _revokeRole(role, account);
+    }
+
+    function renounceRole(bytes32 role, address account) public virtual override {
+        require(account == _msgSender(), "AccessControl: can only renounce self");
+        _revokeRole(role, account);
+    }
+
+    function _grantRole(bytes32 role, address account) internal virtual {
+        if (!hasRole(role, account)) {
+            _roles[role].members[account] = true;
+            emit RoleGranted(role, account, _msgSender());
+        }
+    }
+
+    function _revokeRole(bytes32 role, address account) internal virtual {
+        if (hasRole(role, account)) {
+            _roles[role].members[account] = false;
+            emit RoleRevoked(role, account, _msgSender());
+        }
+    }
+}
+
+contract EscroFactory is AccessControl, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+    using Address for address payable;
+
+    bytes32 public constant ARBITER_ROLE = keccak256("ARBITER_ROLE");
+    uint256 public constant MAX_FEE_BPS = 100;
+    uint256 public constant BPS_DENOMINATOR = 10_000;
+    uint256 public constant MAX_TRADE_ID_LENGTH = 64;
+    uint256 public constant MIN_TRADE_AMOUNT = 1e6;
+    uint64 public constant IMPL_TIMELOCK = 2 days;
+
+    address public constant BSC_USDT = 0x55d398326f99059fF775485246999027B3197955;
+    address public constant BSC_BTCB = 0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c;
+    address public constant BSC_ETH = 0x2170Ed0880ac9A755fd29B2688956BD959F933F8;
+
+    address public implementation;
+    address public pendingImplementation;
+    uint64 public implementationTimelockEnd;
+    address public feeCollector;
+    uint256 public sellerFeeBps = 10;
+    uint256 public buyerFeeBps = 20;
+    bool public creationPaused;
+    bool public globalPaused;
+    bool public tokenWhitelistLocked;
+
+    mapping(address => bool) public whitelistedTokens;
+    mapping(string => address) public tradeClones;
+
+    event TradeEscrowCreated(string indexed tradeId, address indexed cloneAddress, address indexed seller, address buyer, uint256 amount, address tokenAddress, uint256 sellerFeeBps, uint256 buyerFeeBps);
+    event FeeRatesUpdated(uint256 sellerFeeBps, uint256 buyerFeeBps);
+    event FeeCollectorUpdated(address indexed newFeeCollector);
+    event TokenWhitelistUpdated(address indexed token, bool whitelisted);
+    event TokenWhitelistLocked();
+    event ImplementationProposed(address indexed newImpl, uint64 timelockEnd);
+    event ImplementationConfirmed(address indexed newImpl);
+    event ImplementationUpgradeCanceled();
+    event EscrowTokenRescued(address indexed escrow, address indexed token, address indexed to, uint256 amount);
+    event EscrowNativeRescued(address indexed escrow, address indexed to, uint256 amount);
+    event TimedOutTradeRefunded(string indexed tradeId, address indexed escrow);
+    event CreationPauseUpdated(bool paused);
+    event GlobalPauseUpdated(bool paused);
+
+    constructor(address _admin, address _feeCollector) {
+        require(_admin != address(0), "Invalid admin");
+        require(_feeCollector != address(0), "Invalid fee collector");
+
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(ARBITER_ROLE, _admin);
+        feeCollector = _feeCollector;
+        implementation = address(new EscroCloneEscrow());
+
+        _setTokenWhitelisted(BSC_USDT, true);
+        _setTokenWhitelisted(BSC_BTCB, true);
+        _setTokenWhitelisted(BSC_ETH, true);
+        tokenWhitelistLocked = true; // #8: Auto-lock whitelist at deployment — permanently fixed to 3 tokens
+    }
+
+    function createTradeAndLock(
+        string memory tradeId,
+        address tokenAddress,
+        address buyer,
+        uint256 tradeAmount,
+        uint256 timeoutSeconds,
+        bytes memory buyerSig
+    ) external nonReentrant returns (address clone) {
+        require(!creationPaused, "Trade creation paused");
+        require(!globalPaused, "Globally paused");
+        require(bytes(tradeId).length > 0 && bytes(tradeId).length <= MAX_TRADE_ID_LENGTH, "Invalid trade ID");
+        require(tradeClones[tradeId] == address(0), "Trade exists");
+        require(whitelistedTokens[tokenAddress], "Token not whitelisted");
+        require(tokenAddress.code.length > 0, "Token not contract");
+        require(buyer != address(0), "Invalid buyer");
+        require(buyer != msg.sender, "Seller cannot be buyer");
+        require(tradeAmount >= MIN_TRADE_AMOUNT, "Below minimum trade amount");
+
+        // Verify buyer signature (EIP-191)
+        _verifyBuyerSignature(tradeId, msg.sender, tokenAddress, tradeAmount, timeoutSeconds, buyer, buyerSig);
+
+        clone = _deployAndFundEscrow(tradeId, tokenAddress, buyer, tradeAmount, timeoutSeconds);
+
+        tradeClones[tradeId] = clone;
+        emit TradeEscrowCreated(tradeId, clone, msg.sender, buyer, tradeAmount, tokenAddress, sellerFeeBps, buyerFeeBps);
+    }
+
+    function _deployAndFundEscrow(
+        string memory tradeId,
+        address tokenAddress,
+        address buyer,
+        uint256 tradeAmount,
+        uint256 timeoutSeconds
+    ) internal returns (address clone) {
+        uint256 sFeeBps = sellerFeeBps;
+        uint256 bFeeBps = buyerFeeBps;
+
+        clone = Clones.clone(implementation);
+
+        {
+            // Initialize clone — scoped to reduce stack pressure
+            EscroCloneEscrow esc = EscroCloneEscrow(payable(clone));
+            esc.initialize(
+                tradeId,
+                msg.sender,
+                buyer,
+                tradeAmount,
+                tokenAddress,
+                sFeeBps,
+                bFeeBps,
+                feeCollector,
+                address(this),
+                timeoutSeconds
+            );
+        }
+
+        {
+            // Fund the clone — scoped to reduce stack pressure
+            uint256 sellerFee = (tradeAmount * sFeeBps) / BPS_DENOMINATOR;
+            uint256 totalSellerLock = tradeAmount + sellerFee;
+            uint256 beforeBalance = IERC20(tokenAddress).balanceOf(clone);
+            IERC20(tokenAddress).safeTransferFrom(msg.sender, clone, totalSellerLock);
+            uint256 afterBalance = IERC20(tokenAddress).balanceOf(clone);
+            require(afterBalance > beforeBalance, "Nothing received");
+            EscroCloneEscrow(payable(clone)).activate(afterBalance - beforeBalance);
+        }
+    }
+
+    function resolveDispute(string memory tradeId, bool favorBuyer) external onlyRole(ARBITER_ROLE) nonReentrant {
+        address clone = tradeClones[tradeId];
+        require(clone != address(0), "Trade not found");
+        EscroCloneEscrow(payable(clone)).resolveDispute(favorBuyer);
+    }
+
+    function refundTimedOutTrade(string memory tradeId) external onlyRole(ARBITER_ROLE) nonReentrant {
+        address clone = tradeClones[tradeId];
+        require(clone != address(0), "Trade not found");
+        EscroCloneEscrow(payable(clone)).adminTimeoutRefund();
+        emit TimedOutTradeRefunded(tradeId, clone);
+    }
+
+    function rescueEscrowToken(string memory tradeId, address token, address to, uint256 tokenAmount) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        address clone = tradeClones[tradeId];
+        require(clone != address(0), "Trade not found");
+        EscroCloneEscrow(payable(clone)).rescueToken(token, to, tokenAmount);
+        emit EscrowTokenRescued(clone, token, to, tokenAmount);
+    }
+
+    function rescueEscrowNative(string memory tradeId, address payable to, uint256 nativeAmount) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        address clone = tradeClones[tradeId];
+        require(clone != address(0), "Trade not found");
+        EscroCloneEscrow(payable(clone)).rescueNative(to, nativeAmount);
+        emit EscrowNativeRescued(clone, to, nativeAmount);
+    }
+
+    function setCreationPaused(bool paused) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        creationPaused = paused;
+        emit CreationPauseUpdated(paused);
+    }
+
+    function setGlobalPaused(bool paused) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        globalPaused = paused;
+        emit GlobalPauseUpdated(paused);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // #1: Two-step implementation upgrade with timelock
+    // ═══════════════════════════════════════════════════════════════
+
+    function setImplementation(address _newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_newImplementation.code.length > 0, "Implementation not contract");
+        pendingImplementation = _newImplementation;
+        implementationTimelockEnd = uint64(block.timestamp) + IMPL_TIMELOCK;
+        emit ImplementationProposed(_newImplementation, implementationTimelockEnd);
+    }
+
+    function confirmImplementation() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingImplementation != address(0), "Nothing pending");
+        require(block.timestamp >= implementationTimelockEnd, "Timelock not elapsed");
+        implementation = pendingImplementation;
+        emit ImplementationConfirmed(pendingImplementation);
+        pendingImplementation = address(0);
+        implementationTimelockEnd = 0;
+    }
+
+    function cancelImplementationUpgrade() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingImplementation != address(0), "Nothing pending");
+        emit ImplementationUpgradeCanceled();
+        pendingImplementation = address(0);
+        implementationTimelockEnd = 0;
+    }
+
+    function setFeeRates(uint256 _sellerFeeBps, uint256 _buyerFeeBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_sellerFeeBps <= MAX_FEE_BPS && _buyerFeeBps <= MAX_FEE_BPS, "Fee too high");
+        sellerFeeBps = _sellerFeeBps;
+        buyerFeeBps = _buyerFeeBps;
+        emit FeeRatesUpdated(_sellerFeeBps, _buyerFeeBps);
+    }
+
+    function setFeeCollector(address _newCollector) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_newCollector != address(0), "Invalid collector");
+        feeCollector = _newCollector;
+        emit FeeCollectorUpdated(_newCollector);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // #8: Lockable token whitelist
+    // ═══════════════════════════════════════════════════════════════
+
+    function lockTokenWhitelist() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(!tokenWhitelistLocked, "Already locked");
+        tokenWhitelistLocked = true;
+        emit TokenWhitelistLocked();
+    }
+
+    function setTokenWhitelisted(address token, bool whitelisted) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(!tokenWhitelistLocked, "Whitelist locked");
+        require(token != address(0), "Invalid token");
+        if (whitelisted) require(token.code.length > 0 || _isKnownBscToken(token), "Token not contract");
+        _setTokenWhitelisted(token, whitelisted);
+    }
+
+    function rescueFactoryToken(address token, address to, uint256 tokenAmount) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        require(to != address(0), "Invalid recipient");
+        IERC20(token).safeTransfer(to, tokenAmount);
+    }
+
+    function rescueFactoryNative(address payable to, uint256 nativeAmount) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        require(to != address(0), "Invalid recipient");
+        to.sendValue(nativeAmount);
+    }
+
+    function requiredSellerLock(uint256 tradeAmount) external view returns (uint256) {
+        return tradeAmount + ((tradeAmount * sellerFeeBps) / BPS_DENOMINATOR);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // #5: Buyer signature verification helpers
+    // ═══════════════════════════════════════════════════════════════
+
+    function _verifyBuyerSignature(
+        string memory tradeId,
+        address seller,
+        address tokenAddress,
+        uint256 tradeAmount,
+        uint256 timeoutSeconds,
+        address buyer,
+        bytes memory sig
+    ) internal view {
+        bytes32 structHash = keccak256(abi.encode(
+            tradeId,
+            seller,
+            tokenAddress,
+            tradeAmount,
+            timeoutSeconds,
+            block.chainid,
+            address(this)
+        ));
+        bytes32 ethHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", structHash));
+
+        require(sig.length == 65, "Invalid signature length");
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+        if (v < 27) v += 27;
+        require(v == 27 || v == 28, "Invalid v");
+        require(uint256(s) <= 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0, "Invalid s");
+        address recovered = ecrecover(ethHash, v, r, s);
+        require(recovered != address(0) && recovered == buyer, "Invalid buyer signature");
+    }
+
+    function _setTokenWhitelisted(address token, bool whitelisted) internal {
+        whitelistedTokens[token] = whitelisted;
+        emit TokenWhitelistUpdated(token, whitelisted);
+    }
+
+    function _isKnownBscToken(address token) internal pure returns (bool) {
+        return token == BSC_USDT || token == BSC_BTCB || token == BSC_ETH;
+    }
+}
+
+contract EscroCloneEscrow is Initializable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+    using Address for address payable;
+
+    enum Status { UNINITIALIZED, LOCKED, PAID, RELEASED, REFUNDED, DISPUTED, CANCELLED }
+
+    uint256 public constant MAX_FEE_BPS = 100;
+    uint256 public constant BPS_DENOMINATOR = 10_000;
+
+    string public tradeId;
+    address public seller;
+    address public buyer;
+    uint256 public amount;
+    address public tokenAddress;
+    uint256 public sellerFeeBps;
+    uint256 public buyerFeeBps;
+    address public feeCollector;
+    address public factoryAdmin;
+    Status public status;
+    uint256 public paymentDeadline;
+    uint256 public timeoutDuration;
+    uint256 public lockedAmount;
+    uint256 public availableBalance;
+    uint256 public evidenceNonce;
+
+    event EscrowInitialized(string indexed tradeId, address indexed seller, address indexed buyer, uint256 amount, address tokenAddress);
+    event EscrowMarkedPaid(string indexed tradeId, address indexed buyer);
+    event DisputeOpened(string indexed tradeId, address indexed opener);
+    event EscrowReleased(string indexed tradeId, address indexed buyer, uint256 buyerPayout, uint256 totalFee);
+    event EscrowRefunded(string indexed tradeId, address indexed seller, uint256 refundAmount);
+    event DisputeResolved(string indexed tradeId, bool favorBuyer);
+    event TokenRescued(address indexed token, address indexed to, uint256 amount);
+    event NativeRescued(address indexed to, uint256 amount);
+    event TimeoutRefundClaimed(string indexed tradeId, address indexed seller, uint256 refundAmount);
+    event TradeCancelled(string indexed tradeId, address indexed buyer);
+    event TimeoutRefundExecuted(string indexed tradeId, address indexed executor, uint256 refundAmount);
+    event EscrowFunded(string indexed tradeId, uint256 principal, uint256 lockedAmount);
+    event DisputeEvidenceSubmitted(string indexed tradeId, uint256 indexed nonce, address indexed submitter, bytes32 evidenceHash, string uri);
+
+    constructor() {
+        _disableInitializers();
+    }
+
+    // #6: receive() removed — no forced ETH
+
+    modifier whenNotPaused() {
+        require(!EscroFactory(factoryAdmin).globalPaused(), "Globally paused");
+        _;
+    }
+
+    function initialize(
+        string memory _tradeId,
+        address _seller,
+        address _buyer,
+        uint256 _amount,
+        address _tokenAddress,
+        uint256 _sellerFeeBps,
+        uint256 _buyerFeeBps,
+        address _feeCollector,
+        address _factoryAdmin,
+        uint256 _timeoutSeconds
+    ) external initializer {
+        require(bytes(_tradeId).length > 0 && bytes(_tradeId).length <= 64, "Invalid trade ID");
+        require(_seller != address(0) && _buyer != address(0), "Invalid participant");
+        require(_seller != _buyer, "Seller cannot be buyer");
+        require(_amount > 0, "Invalid amount");
+        require(_tokenAddress.code.length > 0, "Token not contract");
+        require(_sellerFeeBps <= MAX_FEE_BPS && _buyerFeeBps <= MAX_FEE_BPS, "Fee too high");
+        require(_feeCollector != address(0), "Invalid fee collector");
+        require(_factoryAdmin != address(0) && msg.sender == _factoryAdmin, "Only factory");
+        require(_timeoutSeconds >= 1 hours && _timeoutSeconds <= 30 days, "Invalid timeout duration");
+
+        tradeId = _tradeId;
+        seller = _seller;
+        buyer = _buyer;
+        amount = _amount;
+        tokenAddress = _tokenAddress;
+        sellerFeeBps = _sellerFeeBps;
+        buyerFeeBps = _buyerFeeBps;
+        feeCollector = _feeCollector;
+        factoryAdmin = _factoryAdmin;
+        status = Status.UNINITIALIZED;
+        timeoutDuration = _timeoutSeconds;
+
+        emit EscrowInitialized(_tradeId, _seller, _buyer, _amount, _tokenAddress);
+    }
+
+    function activate(uint256 received) external {
+        require(msg.sender == factoryAdmin, "Only factory");
+        require(status == Status.UNINITIALIZED, "Already activated");
+        require(received > 0 && IERC20(tokenAddress).balanceOf(address(this)) >= received, "Invalid funding");
+
+        uint256 fundedPrincipal = (received * BPS_DENOMINATOR) / (BPS_DENOMINATOR + sellerFeeBps);
+        require(fundedPrincipal > 0, "Funding too low");
+        amount = fundedPrincipal;
+        lockedAmount = received;
+        availableBalance = received; // #4: internal accounting
+        paymentDeadline = block.timestamp + timeoutDuration;
+        status = Status.LOCKED;
+        emit EscrowFunded(tradeId, fundedPrincipal, received);
+    }
+
+    function claimTimeoutRefund() external nonReentrant whenNotPaused {
+        require(msg.sender == seller, "Only seller");
+        require(status == Status.LOCKED, "Trade paid/disputed");
+        require(block.timestamp > paymentDeadline, "Timeout not reached");
+
+        uint256 refundAmount = availableBalance; // #4: use internal accounting
+        require(refundAmount > 0, "No escrow balance");
+
+        status = Status.REFUNDED;
+        availableBalance = 0;
+        IERC20(tokenAddress).safeTransfer(seller, refundAmount);
+        emit TimeoutRefundClaimed(tradeId, seller, refundAmount);
+    }
+
+    function markPaid() external nonReentrant whenNotPaused {
+        require(msg.sender == buyer, "Only buyer");
+        require(status == Status.LOCKED, "Invalid status");
+        require(block.timestamp <= paymentDeadline, "Payment deadline passed");
+        status = Status.PAID;
+        emit EscrowMarkedPaid(tradeId, buyer);
+    }
+
+    function openDispute() external nonReentrant whenNotPaused {
+        require(msg.sender == seller || msg.sender == buyer, "Only participant");
+        require(status == Status.PAID, "Payment not marked");
+        status = Status.DISPUTED;
+        emit DisputeOpened(tradeId, msg.sender);
+    }
+
+    function submitDisputeEvidence(bytes32 evidenceHash, string calldata uri) external whenNotPaused {
+        require(msg.sender == seller || msg.sender == buyer, "Only participant");
+        require(status == Status.DISPUTED, "Not disputed");
+        require(evidenceHash != bytes32(0), "Invalid evidence hash");
+        require(bytes(uri).length <= 256, "URI too long");
+        emit DisputeEvidenceSubmitted(tradeId, ++evidenceNonce, msg.sender, evidenceHash, uri);
+    }
+
+    // ✨: Seller can release during PAID or DISPUTED state
+    function releaseToBuyer() external nonReentrant whenNotPaused {
+        require(msg.sender == seller, "Only seller");
+        require(
+            status == Status.PAID || status == Status.DISPUTED,
+            "Must be paid or disputed"
+        );
+        _releaseToBuyer();
+    }
+
+    function cancelBeforePayment() external nonReentrant whenNotPaused {
+        require(msg.sender == buyer, "Only buyer");
+        require(status == Status.LOCKED, "Payment already marked");
+
+        uint256 refundAmount = availableBalance; // #4: use internal accounting
+        require(refundAmount > 0, "No escrow balance");
+        status = Status.CANCELLED;
+        availableBalance = 0;
+        IERC20(tokenAddress).safeTransfer(seller, refundAmount);
+        emit TradeCancelled(tradeId, buyer);
+    }
+
+    function adminTimeoutRefund() external nonReentrant whenNotPaused {
+        require(msg.sender == factoryAdmin, "Only factory");
+        require(status == Status.LOCKED, "Trade paid/disputed");
+        require(block.timestamp > paymentDeadline, "Timeout not reached");
+
+        uint256 refundAmount = availableBalance; // #4: use internal accounting
+        _refundToSeller();
+        emit TimeoutRefundExecuted(tradeId, msg.sender, refundAmount);
+    }
+
+    function resolveDispute(bool favorBuyer) external nonReentrant whenNotPaused {
+        require(msg.sender == factoryAdmin, "Only factory");
+        require(status == Status.DISPUTED, "Not disputed");
+        if (favorBuyer) _releaseToBuyer();
+        else _refundToSeller();
+        emit DisputeResolved(tradeId, favorBuyer);
+    }
+
+    function rescueToken(address token, address to, uint256 tokenAmount) external nonReentrant whenNotPaused {
+        require(msg.sender == factoryAdmin, "Only factory");
+        require(to != address(0), "Invalid recipient");
+        require(token != tokenAddress, "Cannot rescue escrow token");
+        IERC20(token).safeTransfer(to, tokenAmount);
+        emit TokenRescued(token, to, tokenAmount);
+    }
+
+    function rescueNative(address payable to, uint256 nativeAmount) external nonReentrant whenNotPaused {
+        require(msg.sender == factoryAdmin, "Only factory");
+        require(to != address(0), "Invalid recipient");
+        to.sendValue(nativeAmount);
+        emit NativeRescued(to, nativeAmount);
+    }
+
+    function expectedLockedAmount() public view returns (uint256) {
+        return amount + ((amount * sellerFeeBps) / BPS_DENOMINATOR);
+    }
+
+    function _releaseToBuyer() internal {
+        IERC20 token = IERC20(tokenAddress);
+        uint256 available = availableBalance; // #4: use internal accounting
+        require(available > 0, "No escrow balance");
+
+        uint256 sellerFee = lockedAmount > amount ? lockedAmount - amount : 0;
+        uint256 buyerFee = (amount * buyerFeeBps) / BPS_DENOMINATOR;
+        uint256 totalFee = sellerFee + buyerFee;
+        // #9: ceil-div to prevent fee rounding to zero
+        uint256 feeTransfer = lockedAmount == 0
+            ? 0
+            : (available * totalFee + lockedAmount - 1) / lockedAmount;
+        if (feeTransfer > available) feeTransfer = available; // safety cap
+
+        status = Status.RELEASED;
+        availableBalance = 0;
+        if (feeTransfer > 0) token.safeTransfer(feeCollector, feeTransfer);
+        uint256 buyerPayout = available - feeTransfer;
+        if (buyerPayout > 0) token.safeTransfer(buyer, buyerPayout);
+        emit EscrowReleased(tradeId, buyer, buyerPayout, feeTransfer);
+    }
+
+    function _refundToSeller() internal {
+        uint256 refundAmount = availableBalance; // #4: use internal accounting
+        require(refundAmount > 0, "No escrow balance");
+
+        status = Status.REFUNDED;
+        availableBalance = 0;
+        IERC20(tokenAddress).safeTransfer(seller, refundAmount);
+        emit EscrowRefunded(tradeId, seller, refundAmount);
+    }
+}
